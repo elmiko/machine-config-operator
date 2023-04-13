@@ -69,6 +69,7 @@ func (b *Bootstrap) Run(destDir string) error {
 
 	scheme := runtime.NewScheme()
 	mcfgv1.Install(scheme)
+	apioperatorsv1.Install(scheme)
 	apioperatorsv1alpha1.Install(scheme)
 	apicfgv1.Install(scheme)
 	codecFactory := serializer.NewCodecFactory(scheme)
