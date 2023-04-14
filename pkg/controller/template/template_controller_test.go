@@ -9,6 +9,7 @@ import (
 	"github.com/clarketm/json"
 	configv1 "github.com/openshift/api/config/v1"
 	osev1 "github.com/openshift/api/config/v1"
+	operatorsv1 "github.com/openshift/api/operator/v1"
 	oseconfigfake "github.com/openshift/client-go/config/clientset/versioned/fake"
 	oseinformersv1 "github.com/openshift/client-go/config/informers/externalversions"
 	oseoperatorfake "github.com/openshift/client-go/operator/clientset/versioned/fake"
@@ -51,13 +52,15 @@ type fixture struct {
 	ccLister   []*mcfgv1.ControllerConfig
 	mcLister   []*mcfgv1.MachineConfig
 	featLister []*osev1.FeatureGate
+	storLister []*operatorsv1.Storage
 
 	kubeactions []core.Action
 	actions     []core.Action
 
-	kubeobjects []runtime.Object
-	objects     []runtime.Object
-	oseobjects  []runtime.Object
+	kubeobjects  []runtime.Object
+	objects      []runtime.Object
+	oseobjects   []runtime.Object
+	osev1objects []runtime.Object
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -66,6 +69,7 @@ func newFixture(t *testing.T) *fixture {
 	f.objects = []runtime.Object{}
 	f.kubeobjects = []runtime.Object{}
 	f.oseobjects = []runtime.Object{}
+	f.osev1objects = []runtime.Object{}
 	return f
 }
 
@@ -93,6 +97,13 @@ func newControllerConfig(name string) *mcfgv1.ControllerConfig {
 	}
 }
 
+func newStorage() *operatorsv1.Storage {
+	return &operatorsv1.Storage{
+		TypeMeta:   metav1.TypeMeta{APIVersion: operatorsv1.SchemeGroupVersion.String()},
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: metav1.NamespaceDefault},
+	}
+}
+
 func newPullSecret(name string, contents []byte) *corev1.Secret {
 	return &corev1.Secret{
 		TypeMeta:   metav1.TypeMeta{APIVersion: corev1.SchemeGroupVersion.String()},
@@ -106,11 +117,11 @@ func (f *fixture) newController() *Controller {
 	f.client = fake.NewSimpleClientset(f.objects...)
 	f.kubeclient = k8sfake.NewSimpleClientset(f.kubeobjects...)
 	f.oseclient = oseconfigfake.NewSimpleClientset(f.oseobjects...)
-	f.osoperatorclient = oseoperatorfake.NewSimpleClientset([]runtime.Object{}...)
+	f.osoperatorclient = oseoperatorfake.NewSimpleClientset(f.osev1objects...)
 	featinformer := oseinformersv1.NewSharedInformerFactory(f.oseclient, 0)
 
 	cinformer := coreinformersv1.NewSharedInformerFactory(f.kubeclient, noResyncPeriodFunc())
-	opinfromer := operatorinformers.NewSharedInformerFactory(f.osoperatorclient, noResyncPeriodFunc())
+	opinformer := operatorinformers.NewSharedInformerFactory(f.osoperatorclient, noResyncPeriodFunc())
 	i := informers.NewSharedInformerFactory(f.client, noResyncPeriodFunc())
 	c := New(
 		templateDir,
@@ -118,7 +129,7 @@ func (f *fixture) newController() *Controller {
 		i.Machineconfiguration().V1().MachineConfigs(),
 		cinformer.Core().V1().Secrets(),
 		featinformer.Config().V1().FeatureGates(),
-		opinfromer.Operator().V1().Storages(),
+		opinformer.Operator().V1().Storages(),
 		f.kubeclient,
 		f.client,
 	)
@@ -126,6 +137,7 @@ func (f *fixture) newController() *Controller {
 	c.ccListerSynced = alwaysReady
 	c.mcListerSynced = alwaysReady
 	c.featListerSynced = alwaysReady
+	c.storageConfSynced = alwaysReady
 	c.eventRecorder = &record.FakeRecorder{}
 
 	stopCh := make(chan struct{})
@@ -143,6 +155,10 @@ func (f *fixture) newController() *Controller {
 
 	for _, c := range f.featLister {
 		featinformer.Config().V1().FeatureGates().Informer().GetIndexer().Add(c)
+	}
+
+	for _, s := range f.storLister {
+		opinformer.Operator().V1().Storages().Informer().GetIndexer().Add(s)
 	}
 
 	return c
@@ -311,10 +327,13 @@ func TestCreatesMachineConfigs(t *testing.T) {
 	f := newFixture(t)
 	cc := newControllerConfig("test-cluster")
 	ps := newPullSecret("coreos-pull-secret", []byte(`{"dummy": "dummy"}`))
+	so := newStorage()
 
 	f.ccLister = append(f.ccLister, cc)
 	f.objects = append(f.objects, cc)
 	f.kubeobjects = append(f.kubeobjects, ps)
+	f.storLister = append(f.storLister, so)
+	f.osev1objects = append(f.osev1objects, so)
 
 	expMCs, err := getMachineConfigsForControllerConfig(templateDir, cc, []byte(`{"dummy": "dummy"}`), nil, nil)
 	if err != nil {
